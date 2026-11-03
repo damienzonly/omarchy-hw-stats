@@ -739,9 +739,11 @@ BarWidget {
         }
 
         // Legend: swatch, direction, current rate and peak over the window.
-        Flow {
+        // One line per direction (not a Flow) so the layout never reflows
+        // as the rate strings change width.
+        Column {
           width: parent.width
-          spacing: Style.space(16)
+          spacing: Style.space(4)
 
           Repeater {
             model: [
