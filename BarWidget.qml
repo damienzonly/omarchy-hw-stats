@@ -28,7 +28,7 @@ BarWidget {
   property real rxNow: 0
   property real txNow: 0
   property var mem: ({})
-  property var temps: ({ cpu: 0, gpu: 0, nvme: 0 })
+  property var temps: ({ cpu: 0, nvme: 0 })
   property int freqMhz: 0
   property var ifaces: []          // [{ name, rx, tx, rxTotal, txTotal, ip }]
   property var ifaceHist: ({})     // name -> { rx: [], tx: [] }
@@ -46,12 +46,28 @@ BarWidget {
   property var topMem: []
   property var topGpu: []
   property var topVram: []
-  property var gpuHist: []
-  property var vramHist: []
-  property real gpuNow: 0
-  property real vramNow: 0
-  property var gpu: ({ busy: 0, vramUsed: 0, vramTotal: 0, gttUsed: 0, gttTotal: 0 })
-  readonly property bool hasGpu: gpu.vramTotal > 0
+  // One entry per GPU from the sampler: { id, vendor, driver, name, busy,
+  // memUsed, memTotal, gttUsed, gttTotal, temp, source }. memTotal is 0 for
+  // integrated GPUs, which use shared system memory.
+  property var gpus: []
+  property var gpuHistById: ({})   // id -> { busy: [], mem: [] } (mem in %)
+  property string selectedGpu: ""
+  readonly property bool hasGpu: gpus.length > 0
+  readonly property var gpu: {
+    for (var i = 0; i < gpus.length; i++) if (gpus[i].id === selectedGpu) return gpus[i]
+    return gpus.length ? gpus[0] : { id: "", name: "", busy: 0, memUsed: 0, memTotal: 0, gttUsed: 0, gttTotal: 0, temp: 0 }
+  }
+  readonly property var gpuHist: gpuHistById[gpu.id] ? gpuHistById[gpu.id].busy : []
+  readonly property var vramHist: gpu.memTotal > 0 && gpuHistById[gpu.id] ? gpuHistById[gpu.id].mem : []
+  readonly property real gpuNow: gpu.busy
+  readonly property real vramNow: gpu.memTotal > 0 ? 100 * gpu.memUsed / gpu.memTotal : 0
+  readonly property var topGpuSel: topGpu.filter(function(r) { return r.gpu === gpu.id })
+  readonly property var topVramSel: topVram.filter(function(r) { return r.gpu === gpu.id && r.vram > 0 })
+
+  function gpuShortName(g) {
+    var vendor = { amd: "AMD", intel: "Intel", nvidia: "NVIDIA", apple: "Apple" }[g.vendor] || g.driver
+    return vendor + (g.memTotal > 0 ? "" : " (integrata)")
+  }
   property var ips: ({})
 
   // Series colors come from the theme: download = accent, upload = blue,
@@ -158,12 +174,24 @@ BarWidget {
     _prevNet = s.net
     _prevTime = now
 
-    if (s.gpu) {
-      gpu = s.gpu
-      gpuNow = s.gpu.busy
-      vramNow = s.gpu.vramTotal > 0 ? 100 * s.gpu.vramUsed / s.gpu.vramTotal : 0
-      gpuHist = push(gpuHist, gpuNow)
-      vramHist = push(vramHist, vramNow)
+    if (s.gpus) {
+      var gh = {}
+      for (var gi = 0; gi < s.gpus.length; gi++) {
+        var g = s.gpus[gi]
+        var oldG = gpuHistById[g.id] || { busy: [], mem: [] }
+        gh[g.id] = {
+          busy: push(oldG.busy, g.busy),
+          mem: push(oldG.mem, g.memTotal > 0 ? 100 * g.memUsed / g.memTotal : 0)
+        }
+      }
+      gpuHistById = gh
+      gpus = s.gpus
+      // Default to the first discrete GPU (it has dedicated memory).
+      if (!gh[selectedGpu]) {
+        var pick = s.gpus.length ? s.gpus[0].id : ""
+        for (var gj = 0; gj < s.gpus.length; gj++) if (s.gpus[gj].memTotal > 0) { pick = s.gpus[gj].id; break }
+        selectedGpu = pick
+      }
     }
 
     temps = s.temp
@@ -200,7 +228,7 @@ BarWidget {
 
   Process {
     id: sampler
-    command: ["bash", root.pluginDir + "sampler.sh", String(root.sampleInterval)]
+    command: ["python3", "-B", root.pluginDir + "sampler.py", String(root.sampleInterval)]
     running: true
     stdout: SplitParser { onRead: function(data) { root.ingest(data) } }
     onExited: restartTimer.restart()
@@ -214,7 +242,7 @@ BarWidget {
 
   Process {
     id: procs
-    command: ["bash", root.pluginDir + "procs.sh", "6"]
+    command: ["python3", "-B", root.pluginDir + "procs.py", "6"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -475,7 +503,7 @@ BarWidget {
           textFormat: Text.PlainText
           text: pl.mode === "rss" ? root.formatKb(modelData.rss)
             : pl.mode === "vram" ? root.formatKb(modelData.vram)
-            : pl.mode === "gpu" ? modelData.gpu.toFixed(1) + "%"
+            : pl.mode === "gpu" ? modelData.busy.toFixed(1) + "%"
             : modelData.cpu.toFixed(1) + "%"
           color: Qt.darker(root.bar.foreground, 1.3)
           font.family: root.bar.fontFamily
@@ -579,7 +607,54 @@ BarWidget {
       Section {
         visible: root.hasGpu
         title: "GPU"
-        trailing: Math.round(root.gpuNow) + "%  ·  VRAM " + root.formatBytes(root.gpu.vramUsed) + " / " + root.formatBytes(root.gpu.vramTotal)
+        trailing: Math.round(root.gpuNow) + "%" + (root.gpu.temp > 0 ? "  ·  " + root.gpu.temp + "°C" : "")
+
+        // Device picker, only when there's more than one GPU.
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+          visible: root.gpus.length > 1
+
+          Repeater {
+            model: root.gpus
+
+            BorderSurface {
+              id: chip
+              required property var modelData
+              readonly property bool selected: root.gpu.id === modelData.id
+              width: chipText.implicitWidth + Style.space(16)
+              height: chipText.implicitHeight + Style.space(8)
+              radius: Style.spacing.labelGap
+              color: selected ? Style.selectedFillFor(root.bar.foreground, Commons.Color.accent)
+                : (chipHover.hovered ? Commons.Util.alpha(root.bar.foreground, 0.06) : "transparent")
+              borderSpec: Border.controlSpec("normal", root.bar.foreground, Commons.Color.accent)
+
+              Text {
+                id: chipText
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: root.gpuShortName(chip.modelData) + "  " + Math.round(chip.modelData.busy) + "%"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: chip.selected
+              }
+
+              HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: root.selectedGpu = chip.modelData.id }
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.gpu.name + (root.gpu.source === "none" ? "  ·  nvidia-smi non trovato" : "")
+          color: Qt.darker(root.bar.foreground, 1.4)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
 
         BigGraph {
           values: root.gpuHist
@@ -595,9 +670,11 @@ BarWidget {
           Repeater {
             model: [
               { label: "Carico", color: root.gpuColor, text: Math.round(root.gpuNow) + "%" },
-              { label: "VRAM", color: root.memColor, text: Math.round(root.vramNow) + "%" },
-              { label: "GTT", color: "transparent", text: root.formatBytes(root.gpu.gttUsed) + " / " + root.formatBytes(root.gpu.gttTotal) }
-            ]
+              root.gpu.memTotal > 0
+                ? { label: "VRAM", color: root.memColor, text: root.formatBytes(root.gpu.memUsed) + " / " + root.formatBytes(root.gpu.memTotal) }
+                : { label: "Memoria condivisa", color: "transparent", text: root.formatBytes(root.gpu.memUsed) },
+              { label: "GTT", color: "transparent", text: root.gpu.gttTotal > 0 ? root.formatBytes(root.gpu.gttUsed) + " / " + root.formatBytes(root.gpu.gttTotal) : "" }
+            ].filter(function(e) { return e.text !== "" })
 
             Row {
               required property var modelData
@@ -753,22 +830,29 @@ BarWidget {
       Section {
         title: "TEMPERATURE"
 
-        Row {
+        Flow {
           width: parent.width
           spacing: Style.space(16)
 
+          // An integrated GPU has no sensor of its own: it shares the CPU
+          // die, so it reports the CPU package temperature.
           Repeater {
-            model: [
-              { label: "CPU", value: root.temps.cpu },
-              { label: "GPU", value: root.temps.gpu },
-              { label: "NVMe", value: root.temps.nvme }
-            ]
+            model: [{ label: "CPU", value: root.temps.cpu, note: "" }]
+              .concat(root.gpus.map(function(g) {
+                var shared = g.temp <= 0 && g.memTotal <= 0
+                return {
+                  label: "GPU " + root.gpuShortName(g).replace(" (integrata)", ""),
+                  value: shared ? root.temps.cpu : g.temp,
+                  note: shared ? " (package CPU)" : ""
+                }
+              }))
+              .concat([{ label: "NVMe", value: root.temps.nvme, note: "" }])
 
             Text {
               required property var modelData
               visible: modelData.value > 0
               textFormat: Text.PlainText
-              text: modelData.label + "  " + modelData.value + "°C"
+              text: modelData.label + "  " + modelData.value + "°C" + modelData.note
               color: root.tempColor(modelData.value)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -791,8 +875,8 @@ BarWidget {
             model: [
               { title: "CPU", mode: "cpu", list: root.topCpu },
               { title: "RAM", mode: "rss", list: root.topMem },
-              { title: "GPU", mode: "gpu", list: root.topGpu },
-              { title: "VRAM", mode: "vram", list: root.topVram }
+              { title: "GPU · " + root.gpuShortName(root.gpu), mode: "gpu", list: root.topGpuSel },
+              { title: (root.gpu.memTotal > 0 ? "VRAM" : "MEMORIA GPU") + " · " + root.gpuShortName(root.gpu), mode: "vram", list: root.topVramSel }
             ]
 
             Column {
