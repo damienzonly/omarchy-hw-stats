@@ -28,5 +28,8 @@ have been tested.
 Requires `python3`; `lspci` (pciutils) is used for GPU names when present.
 
 Settings (`shell.json`): `historySeconds` (default 300), `sampleInterval` (default 1).
+Both can be changed from the popup's GRAPHS section (window 1m/5m/15m/1h,
+interval 1s/2s/5s), which saves them via `omarchy bar set`. Long windows are
+drawn at about one point per pixel, keeping each pixel's peak.
 
 Toggle the popup from a keybinding: `omarchy-shell damienzonly.stats toggle`.

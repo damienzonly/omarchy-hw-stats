@@ -9,8 +9,23 @@ BarWidget {
   id: root
   moduleName: "damienzonly.stats"
 
-  readonly property int historyLength: Math.max(10, Number(setting("historySeconds", 300)) / sampleInterval)
+  readonly property real historySeconds: Math.max(10, Number(setting("historySeconds", 300)))
   readonly property real sampleInterval: Math.max(0.5, Number(setting("sampleInterval", 1)))
+  readonly property int historyLength: Math.max(10, Math.round(historySeconds / sampleInterval))
+  // Choices offered in the popup's GRAPHS section.
+  readonly property var windowPresets: [
+    { label: "1m", value: 60 }, { label: "5m", value: 300 },
+    { label: "15m", value: 900 }, { label: "1h", value: 3600 }
+  ]
+  readonly property var intervalPresets: [
+    { label: "1s", value: 1 }, { label: "2s", value: 2 }, { label: "5s", value: 5 }
+  ]
+
+  // Persist a setting to this widget's shell.json entry; the shell pushes it
+  // back into `settings`, so the bindings above update live.
+  function saveSetting(key, value) {
+    Quickshell.execDetached(["omarchy", "bar", "set", root.moduleName, key, String(value), "--json"])
+  }
   readonly property int barPoints: 24
   // VPN/tunnel/container interfaces carry traffic already counted on the
   // physical link, so they are left out of the totals.
@@ -253,7 +268,19 @@ BarWidget {
     command: ["python3", "-B", root.pluginDir + "sampler.py", String(root.sampleInterval)]
     running: true
     stdout: SplitParser { onRead: function(data) { root.ingest(data) } }
-    onExited: restartTimer.restart()
+    // A deliberate stop (interval change) restarts right away; a crash waits.
+    property bool restarting: false
+    onExited: {
+      if (restarting) { restarting = false; running = true }
+      else restartTimer.restart()
+    }
+  }
+
+  // The sampler takes its interval as an argument, so restart it on change.
+  onSampleIntervalChanged: {
+    if (!sampler.running) return
+    sampler.restarting = true
+    sampler.running = false
   }
 
   Timer {
@@ -737,6 +764,67 @@ BarWidget {
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+      }
+
+      // Graph history window and sampling rate, saved to shell.json.
+      Section {
+        title: "GRAPHS"
+        trailing: root.historyLength + " samples"
+
+        Repeater {
+          model: [
+            { label: "Window", key: "historySeconds", presets: root.windowPresets, current: root.historySeconds },
+            { label: "Interval", key: "sampleInterval", presets: root.intervalPresets, current: root.sampleInterval }
+          ]
+
+          Row {
+            id: optRow
+            required property var modelData
+            spacing: Style.space(6)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(70)
+              textFormat: Text.PlainText
+              text: optRow.modelData.label
+              color: Qt.darker(root.bar.foreground, 1.3)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: optRow.modelData.presets
+
+              BorderSurface {
+                id: optChip
+                required property var modelData
+                readonly property bool selected: Number(optRow.modelData.current) === modelData.value
+                width: Style.space(44)
+                height: optText.implicitHeight + Style.space(8)
+                radius: Style.spacing.labelGap
+                color: selected ? Style.selectedFillFor(root.bar.foreground, Commons.Color.accent)
+                  : (optHover.hovered ? Commons.Util.alpha(root.bar.foreground, 0.06) : "transparent")
+                borderSpec: Border.controlSpec("normal", root.bar.foreground, Commons.Color.accent)
+
+                Text {
+                  id: optText
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: optChip.modelData.label
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: optChip.selected
+                }
+
+                HoverHandler { id: optHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                  onTapped: if (!optChip.selected) root.saveSetting(optRow.modelData.key, optChip.modelData.value)
+                }
               }
             }
           }

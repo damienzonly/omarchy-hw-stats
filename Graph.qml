@@ -43,10 +43,25 @@ Canvas {
   onColor2Changed: requestPaint()
   onBackgroundChanged: requestPaint()
 
+  // Collapse right-aligned buckets of `k` samples to their max, so long
+  // histories draw at most ~one point per pixel without hiding spikes.
+  function bucketMax(data, k) {
+    if (k <= 1) return data
+    var out = []
+    for (var end = data.length; end > 0; end -= k) {
+      var m = data[end - 1]
+      for (var i = Math.max(0, end - k); i < end - 1; i++) if (data[i] > m) m = data[i]
+      out.push(m)
+    }
+    return out.reverse()
+  }
+
   function drawSeries(ctx, list, color) {
-    var data = visible1(list)
+    var k = Math.max(1, Math.ceil(points / Math.max(1, width)))
+    var data = bucketMax(visible1(list), k)
+    var slots = Math.ceil(points / k)
     if (data.length < 2) return
-    var step = width / Math.max(1, points - 1)
+    var step = width / Math.max(1, slots - 1)
     var x0 = width - (data.length - 1) * step
     var top = Math.max(0.0001, scaleMax)
 
