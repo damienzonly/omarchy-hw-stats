@@ -44,6 +44,14 @@ BarWidget {
   readonly property real netTxNow: netTxHist.length ? netTxHist[netTxHist.length - 1] : 0
   property var topCpu: []
   property var topMem: []
+  property var topGpu: []
+  property var topVram: []
+  property var gpuHist: []
+  property var vramHist: []
+  property real gpuNow: 0
+  property real vramNow: 0
+  property var gpu: ({ busy: 0, vramUsed: 0, vramTotal: 0, gttUsed: 0, gttTotal: 0 })
+  readonly property bool hasGpu: gpu.vramTotal > 0
   property var ips: ({})
 
   // Series colors come from the theme: download = accent, upload = blue,
@@ -53,6 +61,7 @@ BarWidget {
   readonly property color cpuColor: Commons.Color.accent
   property color txColor: "#e8a04c"
   property color memColor: "#c678dd"
+  property color gpuColor: "#56b6c2"
   property color graphBackground: Qt.darker(Commons.Color.background, 1.6)
 
   function themeColor(toml, key, fallback) {
@@ -69,6 +78,7 @@ BarWidget {
       var toml = String(text() || "")
       root.txColor = root.themeColor(toml, "blue", "#e8a04c")
       root.memColor = root.themeColor(toml, "magenta", "#c678dd")
+      root.gpuColor = root.themeColor(toml, "cyan", "#56b6c2")
       root.graphBackground = root.themeColor(toml, "darker_background", Qt.darker(Commons.Color.background, 1.6))
     }
   }
@@ -148,6 +158,14 @@ BarWidget {
     _prevNet = s.net
     _prevTime = now
 
+    if (s.gpu) {
+      gpu = s.gpu
+      gpuNow = s.gpu.busy
+      vramNow = s.gpu.vramTotal > 0 ? 100 * s.gpu.vramUsed / s.gpu.vramTotal : 0
+      gpuHist = push(gpuHist, gpuNow)
+      vramHist = push(vramHist, vramNow)
+    }
+
     temps = s.temp
     freqMhz = s.freq
   }
@@ -204,6 +222,8 @@ BarWidget {
           var d = JSON.parse(text)
           root.topCpu = d.cpu
           root.topMem = d.mem
+          root.topGpu = d.gpu || []
+          root.topVram = d.vram || []
           root.ips = d.ips
         } catch (e) {}
       }
@@ -312,6 +332,18 @@ BarWidget {
 
     BarStat {
       anchors.verticalCenter: parent.verticalCenter
+      visible: root.hasGpu
+      icon: "󰢮"
+      values: root.gpuHist
+      values2: root.vramHist
+      maximum: 100
+      color: root.gpuColor
+      color2: root.memColor
+      label: Math.round(root.gpuNow) + "%"
+    }
+
+    BarStat {
+      anchors.verticalCenter: parent.verticalCenter
       icon: "󰛳"
       values: root.rxHist
       values2: root.txHist
@@ -415,7 +447,7 @@ BarWidget {
   component ProcList: Column {
     id: pl
     property var model: []
-    property bool byMemory: false
+    property string mode: "cpu"   // cpu | rss | gpu | vram
     spacing: Style.space(2)
 
     Repeater {
@@ -441,7 +473,10 @@ BarWidget {
           id: pval
           anchors.right: parent.right
           textFormat: Text.PlainText
-          text: pl.byMemory ? root.formatKb(modelData.rss) : modelData.cpu.toFixed(1) + "%"
+          text: pl.mode === "rss" ? root.formatKb(modelData.rss)
+            : pl.mode === "vram" ? root.formatKb(modelData.vram)
+            : pl.mode === "gpu" ? modelData.gpu.toFixed(1) + "%"
+            : modelData.cpu.toFixed(1) + "%"
           color: Qt.darker(root.bar.foreground, 1.3)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
@@ -536,6 +571,56 @@ BarWidget {
             value: root.mem.SwapTotal
               ? root.formatKb(root.mem.SwapTotal - root.mem.SwapFree) + " / " + root.formatKb(root.mem.SwapTotal)
               : "—"
+          }
+        }
+      }
+
+      // GPU
+      Section {
+        visible: root.hasGpu
+        title: "GPU"
+        trailing: Math.round(root.gpuNow) + "%  ·  VRAM " + root.formatBytes(root.gpu.vramUsed) + " / " + root.formatBytes(root.gpu.vramTotal)
+
+        BigGraph {
+          values: root.gpuHist
+          values2: root.vramHist
+          maximum: 100
+          lineColor: root.gpuColor
+          lineColor2: root.memColor
+        }
+
+        Row {
+          spacing: Style.space(16)
+
+          Repeater {
+            model: [
+              { label: "Carico", color: root.gpuColor, text: Math.round(root.gpuNow) + "%" },
+              { label: "VRAM", color: root.memColor, text: Math.round(root.vramNow) + "%" },
+              { label: "GTT", color: "transparent", text: root.formatBytes(root.gpu.gttUsed) + " / " + root.formatBytes(root.gpu.gttTotal) }
+            ]
+
+            Row {
+              required property var modelData
+              spacing: Style.space(5)
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: modelData.color !== "transparent"
+                width: Style.space(10)
+                height: Style.space(10)
+                radius: width / 2
+                color: modelData.color
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: modelData.label + "  " + modelData.text
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
           }
         }
       }
@@ -696,38 +781,36 @@ BarWidget {
       Section {
         title: "PROCESSI"
 
-        Row {
+        Grid {
           width: parent.width
-          spacing: Style.space(16)
+          columns: 2
+          columnSpacing: Style.space(16)
+          rowSpacing: Style.space(10)
 
-          Column {
-            width: (parent.width - Style.space(16)) / 2
-            spacing: Style.space(4)
+          Repeater {
+            model: [
+              { title: "CPU", mode: "cpu", list: root.topCpu },
+              { title: "RAM", mode: "rss", list: root.topMem },
+              { title: "GPU", mode: "gpu", list: root.topGpu },
+              { title: "VRAM", mode: "vram", list: root.topVram }
+            ]
 
-            Text {
-              textFormat: Text.PlainText
-              text: "CPU"
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
+            Column {
+              required property var modelData
+              visible: root.hasGpu || (modelData.mode !== "gpu" && modelData.mode !== "vram")
+              width: (column.width - Style.space(16)) / 2
+              spacing: Style.space(4)
+
+              Text {
+                textFormat: Text.PlainText
+                text: modelData.title
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              ProcList { width: parent.width; model: modelData.list; mode: modelData.mode }
             }
-
-            ProcList { width: parent.width; model: root.topCpu }
-          }
-
-          Column {
-            width: (parent.width - Style.space(16)) / 2
-            spacing: Style.space(4)
-
-            Text {
-              textFormat: Text.PlainText
-              text: "RAM"
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-
-            ProcList { width: parent.width; model: root.topMem; byMemory: true }
           }
         }
       }
