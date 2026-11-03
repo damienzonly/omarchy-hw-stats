@@ -66,7 +66,7 @@ BarWidget {
 
   function gpuShortName(g) {
     var vendor = { amd: "AMD", intel: "Intel", nvidia: "NVIDIA", apple: "Apple" }[g.vendor] || g.driver
-    return vendor + (g.memTotal > 0 ? "" : " (integrata)")
+    return vendor + (g.memTotal > 0 ? "" : " (integrated)")
   }
   property var ips: ({})
 
@@ -573,7 +573,7 @@ BarWidget {
 
       // Memory
       Section {
-        title: "MEMORIA"
+        title: "MEMORY"
         trailing: root.mem.MemTotal
           ? root.formatKb(root.mem.MemTotal - root.mem.MemAvailable) + " / " + root.formatKb(root.mem.MemTotal) + "  ·  " + Math.round(root.memNow) + "%"
           : ""
@@ -590,9 +590,9 @@ BarWidget {
           columnSpacing: Style.space(16)
           rowSpacing: Style.space(2)
 
-          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Disponibile"; value: root.formatKb(root.mem.MemAvailable || 0) }
+          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Available"; value: root.formatKb(root.mem.MemAvailable || 0) }
           KeyValue { width: (column.width - Style.space(16)) / 2; key: "Cache"; value: root.formatKb((root.mem.Cached || 0) + (root.mem.Buffers || 0) + (root.mem.SReclaimable || 0)) }
-          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Condivisa"; value: root.formatKb(root.mem.Shmem || 0) }
+          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Shared"; value: root.formatKb(root.mem.Shmem || 0) }
           KeyValue {
             width: (column.width - Style.space(16)) / 2
             key: "Swap"
@@ -649,7 +649,7 @@ BarWidget {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.gpu.name + (root.gpu.source === "none" ? "  ·  nvidia-smi non trovato" : "")
+          text: root.gpu.name + (root.gpu.source === "none" ? "  ·  nvidia-smi not found" : "")
           color: Qt.darker(root.bar.foreground, 1.4)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
@@ -669,10 +669,10 @@ BarWidget {
 
           Repeater {
             model: [
-              { label: "Carico", color: root.gpuColor, text: Math.round(root.gpuNow) + "%" },
+              { label: "Load", color: root.gpuColor, text: Math.round(root.gpuNow) + "%" },
               root.gpu.memTotal > 0
                 ? { label: "VRAM", color: root.memColor, text: root.formatBytes(root.gpu.memUsed) + " / " + root.formatBytes(root.gpu.memTotal) }
-                : { label: "Memoria condivisa", color: "transparent", text: root.formatBytes(root.gpu.memUsed) },
+                : { label: "Shared memory", color: "transparent", text: root.formatBytes(root.gpu.memUsed) },
               { label: "GTT", color: "transparent", text: root.gpu.gttTotal > 0 ? root.formatBytes(root.gpu.gttUsed) + " / " + root.formatBytes(root.gpu.gttTotal) : "" }
             ].filter(function(e) { return e.text !== "" })
 
@@ -704,7 +704,7 @@ BarWidget {
 
       // Network
       Section {
-        title: "RETE  ·  " + (root.selectedIface || "totale")
+        title: "NETWORK  ·  " + (root.selectedIface || "total")
         BigGraph {
           values: root.netRxHist
           values2: root.netTxHist
@@ -739,7 +739,7 @@ BarWidget {
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
                 text: modelData.label + "  " + root.formatRate(modelData.now) + "/s"
-                  + "  (picco " + root.formatRate(Math.max.apply(null, modelData.hist.concat([0]))) + "/s)"
+                  + "  (peak " + root.formatRate(Math.max.apply(null, modelData.hist.concat([0]))) + "/s)"
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -774,7 +774,7 @@ BarWidget {
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
                 text: ifRow.info.name === ""
-                  ? "Totale (schede fisiche)"
+                  ? "Total (physical interfaces)"
                   : ifRow.info.name + (root.ips[ifRow.info.name] ? "  " + root.ips[ifRow.info.name] : "")
                 color: ifRow.info.virtual ? Qt.darker(root.bar.foreground, 1.5) : root.bar.foreground
                 font.family: root.bar.fontFamily
@@ -841,9 +841,9 @@ BarWidget {
               .concat(root.gpus.map(function(g) {
                 var shared = g.temp <= 0 && g.memTotal <= 0
                 return {
-                  label: "GPU " + root.gpuShortName(g).replace(" (integrata)", ""),
+                  label: "GPU " + root.gpuShortName(g).replace(" (integrated)", ""),
                   value: shared ? root.temps.cpu : g.temp,
-                  note: shared ? " (package CPU)" : ""
+                  note: shared ? " (CPU package)" : ""
                 }
               }))
               .concat([{ label: "NVMe", value: root.temps.nvme, note: "" }])
@@ -863,7 +863,7 @@ BarWidget {
 
       // Processes
       Section {
-        title: "PROCESSI"
+        title: "PROCESSES"
 
         Grid {
           width: parent.width
@@ -876,7 +876,7 @@ BarWidget {
               { title: "CPU", mode: "cpu", list: root.topCpu },
               { title: "RAM", mode: "rss", list: root.topMem },
               { title: "GPU · " + root.gpuShortName(root.gpu), mode: "gpu", list: root.topGpuSel },
-              { title: (root.gpu.memTotal > 0 ? "VRAM" : "MEMORIA GPU") + " · " + root.gpuShortName(root.gpu), mode: "vram", list: root.topVramSel }
+              { title: (root.gpu.memTotal > 0 ? "VRAM" : "GPU MEMORY") + " · " + root.gpuShortName(root.gpu), mode: "vram", list: root.topVramSel }
             ]
 
             Column {
