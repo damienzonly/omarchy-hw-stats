@@ -70,15 +70,30 @@ BarWidget {
   }
   property var ips: ({})
 
-  // Series colors come from the theme: download = accent, upload = blue,
+  // Series colors come from the theme: download = accent, upload = the first
+  // theme color clearly distinct from the accent (yellow preferred),
   // memory = magenta. Graphs sit on the theme's darkest background so the
   // lines always contrast with what's behind them.
   readonly property color rxColor: Commons.Color.accent
   readonly property color cpuColor: Commons.Color.accent
-  property color txColor: "#e8a04c"
+  property var txCandidates: ["#e8a04c"]
+  readonly property color txColor: pickDistinct(txCandidates, rxColor)
   property color memColor: "#c678dd"
   property color gpuColor: "#56b6c2"
   property color graphBackground: Qt.darker(Commons.Color.background, 1.6)
+
+  // First candidate far enough from `avoid` (themes often use blue as the
+  // accent); falls back to the most distant one.
+  function pickDistinct(candidates, avoid) {
+    var a = Qt.color(avoid), best = candidates[0], bestD = -1
+    for (var i = 0; i < candidates.length; i++) {
+      var c = Qt.color(candidates[i])
+      var d = Math.sqrt(Math.pow(c.r - a.r, 2) + Math.pow(c.g - a.g, 2) + Math.pow(c.b - a.b, 2))
+      if (d > 0.3) return candidates[i]
+      if (d > bestD) { bestD = d; best = candidates[i] }
+    }
+    return best
+  }
 
   function themeColor(toml, key, fallback) {
     var m = toml.match(new RegExp("^\\s*" + key + "\\s*=\\s*\"(#[0-9a-fA-F]{6})\"", "m"))
@@ -92,7 +107,14 @@ BarWidget {
     onFileChanged: reload()
     onLoaded: {
       var toml = String(text() || "")
-      root.txColor = root.themeColor(toml, "blue", "#e8a04c")
+      var tx = []
+      var keys = ["yellow", "red", "green", "magenta", "cyan", "blue"]
+      for (var i = 0; i < keys.length; i++) {
+        var v = root.themeColor(toml, keys[i], "")
+        if (v) tx.push(v)
+      }
+      tx.push("#e8a04c")
+      root.txCandidates = tx
       root.memColor = root.themeColor(toml, "magenta", "#c678dd")
       root.gpuColor = root.themeColor(toml, "cyan", "#56b6c2")
       root.graphBackground = root.themeColor(toml, "darker_background", Qt.darker(Commons.Color.background, 1.6))
