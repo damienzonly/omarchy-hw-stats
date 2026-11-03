@@ -394,11 +394,23 @@ BarWidget {
 
   // ---------------------------------------------------------------- popup
 
-  component Section: Column {
+  component Section: BorderSurface {
+    default property alias content: inner.data
     property alias title: header.text
     property alias trailing: trailingText.text
-    width: column.width
-    spacing: Style.space(6)
+    readonly property real pad: Style.space(10)
+    width: parent ? parent.width : 0
+    height: inner.implicitHeight + pad * 2
+    radius: Style.spacing.labelGap * 2
+    color: Commons.Util.alpha(root.bar.foreground, 0.03)
+    borderSpec: Border.flat(Commons.Util.alpha(root.bar.foreground, 0.14), 1)
+
+    Column {
+      id: inner
+      x: parent.pad
+      y: parent.pad
+      width: parent.width - parent.pad * 2
+      spacing: Style.space(6)
 
     Item {
       width: parent.width
@@ -419,6 +431,7 @@ BarWidget {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.bodySmall
       }
+    }
     }
   }
 
@@ -456,7 +469,7 @@ BarWidget {
     property alias minimumScale: g.minimumScale
     property alias lineColor: g.color
     property alias lineColor2: g.color2
-    width: column.width
+    width: parent ? parent.width : 0
     height: Style.space(64)
     radius: Style.spacing.labelGap
     color: root.graphBackground
@@ -519,13 +532,18 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(Style.space(420))
+    readonly property real columnWidth: Style.space(400)
+    contentWidth: popup.fittedContentWidth(columnWidth * 2 + Style.space(12))
     contentHeight: popup.fittedContentHeight(column.implicitHeight)
 
-    Column {
+    Row {
       id: column
       anchors.fill: parent
-      spacing: Style.space(10)
+      spacing: Style.space(12)
+
+      Column {
+        width: (column.width - column.spacing) / 2
+        spacing: Style.space(12)
 
       // CPU
       Section {
@@ -590,11 +608,11 @@ BarWidget {
           columnSpacing: Style.space(16)
           rowSpacing: Style.space(2)
 
-          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Available"; value: root.formatKb(root.mem.MemAvailable || 0) }
-          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Cache"; value: root.formatKb((root.mem.Cached || 0) + (root.mem.Buffers || 0) + (root.mem.SReclaimable || 0)) }
-          KeyValue { width: (column.width - Style.space(16)) / 2; key: "Shared"; value: root.formatKb(root.mem.Shmem || 0) }
+          KeyValue { width: (parent.width - Style.space(16)) / 2; key: "Available"; value: root.formatKb(root.mem.MemAvailable || 0) }
+          KeyValue { width: (parent.width - Style.space(16)) / 2; key: "Cache"; value: root.formatKb((root.mem.Cached || 0) + (root.mem.Buffers || 0) + (root.mem.SReclaimable || 0)) }
+          KeyValue { width: (parent.width - Style.space(16)) / 2; key: "Shared"; value: root.formatKb(root.mem.Shmem || 0) }
           KeyValue {
-            width: (column.width - Style.space(16)) / 2
+            width: (parent.width - Style.space(16)) / 2
             key: "Swap"
             value: root.mem.SwapTotal
               ? root.formatKb(root.mem.SwapTotal - root.mem.SwapFree) + " / " + root.formatKb(root.mem.SwapTotal)
@@ -664,7 +682,8 @@ BarWidget {
           lineColor2: root.memColor
         }
 
-        Row {
+        Flow {
+          width: parent.width
           spacing: Style.space(16)
 
           Repeater {
@@ -702,6 +721,12 @@ BarWidget {
         }
       }
 
+      }
+
+      Column {
+        width: (column.width - column.spacing) / 2
+        spacing: Style.space(12)
+
       // Network
       Section {
         title: "NETWORK  ·  " + (root.selectedIface || "total")
@@ -714,7 +739,8 @@ BarWidget {
         }
 
         // Legend: swatch, direction, current rate and peak over the window.
-        Row {
+        Flow {
+          width: parent.width
           spacing: Style.space(16)
 
           Repeater {
@@ -760,7 +786,7 @@ BarWidget {
               required property string modelData
               readonly property var info: root.ifaceInfo(modelData)
               readonly property bool selected: root.selectedIface === modelData
-              width: column.width
+              width: parent.width
               height: ifName.implicitHeight + Style.space(6)
               radius: Style.spacing.labelGap
               color: selected ? Style.selectedFillFor(root.bar.foreground, Commons.Color.accent)
@@ -882,7 +908,7 @@ BarWidget {
             Column {
               required property var modelData
               visible: root.hasGpu || (modelData.mode !== "gpu" && modelData.mode !== "vram")
-              width: (column.width - Style.space(16)) / 2
+              width: (parent.width - Style.space(16)) / 2
               spacing: Style.space(4)
 
               Text {
@@ -897,6 +923,7 @@ BarWidget {
             }
           }
         }
+      }
       }
     }
   }
