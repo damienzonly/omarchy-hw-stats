@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "damienzonly.stats",
+  "name": "System stats",
+  "version": "1.0.0",
+  "author": "damienzonly",
+  "description": "CPU, memory and network sparklines with a detailed popup",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "System stats",
+    "description": "CPU, RAM and network graphs, per-core load, temperatures and top processes",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "historySeconds": 300,
+      "sampleInterval": 1
+    },
+    "schema": [
+      {
+        "key": "historySeconds",
+        "type": "number",
+        "label": "History shown in the popup graphs (seconds)",
+        "defaultValue": 300
+      },
+      {
+        "key": "sampleInterval",
+        "type": "number",
+        "label": "Sampling interval (seconds)",
+        "defaultValue": 1
+      }
+    ]
+  }
+}
