@@ -738,9 +738,20 @@ BarWidget {
           lineColor2: root.txColor
         }
 
+        // Everything below uses fixed-width columns sized for the widest
+        // possible value, so changing numbers never reflow the layout.
+        FontMetrics {
+          id: capFm
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        TextMetrics { id: labelM; font: capFm.font; text: "Out ↑" }
+        TextMetrics { id: rateM; font: capFm.font; text: "↓8888K" }
+        TextMetrics { id: rateSM; font: capFm.font; text: "8888K/s" }
+        TextMetrics { id: totalM; font: capFm.font; text: "↓888.88 MB" }
+
         // Legend: swatch, direction, current rate and peak over the window.
-        // One line per direction (not a Flow) so the layout never reflows
-        // as the rate strings change width.
+        // Always one line per direction.
         Column {
           width: parent.width
           spacing: Style.space(4)
@@ -753,7 +764,7 @@ BarWidget {
 
             Row {
               required property var modelData
-              spacing: Style.space(5)
+              spacing: Style.space(6)
 
               Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
@@ -764,20 +775,47 @@ BarWidget {
               }
 
               Text {
-                anchors.verticalCenter: parent.verticalCenter
+                width: Math.ceil(labelM.advanceWidth)
                 textFormat: Text.PlainText
-                text: modelData.label + "  " + root.formatRate(modelData.now) + "/s"
-                  + "  (peak " + root.formatRate(Math.max.apply(null, modelData.hist.concat([0]))) + "/s)"
+                text: modelData.label
                 color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
+                font: capFm.font
+              }
+
+              Text {
+                width: Math.ceil(rateSM.advanceWidth)
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+                text: root.formatRate(modelData.now) + "/s"
+                color: root.bar.foreground
+                font: capFm.font
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: "(peak " + root.formatRate(Math.max.apply(null, modelData.hist.concat([0]))) + "/s)"
+                color: Qt.darker(root.bar.foreground, 1.3)
+                font: capFm.font
               }
             }
           }
         }
 
-        Column {
+        // Interface list: fixed height (scrolls when interfaces outnumber
+        // the visible rows), so containers coming and going don't resize it.
+        Flickable {
+          id: ifList
+          readonly property int visibleRows: 8
+          readonly property real rowH: Math.ceil(capFm.height) + Style.space(6)
           width: parent.width
+          height: visibleRows * rowH + (visibleRows - 1) * ifCol.spacing
+          contentHeight: ifCol.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: ifCol
+          width: ifList.width
           spacing: Style.space(2)
 
           Repeater {
@@ -789,7 +827,7 @@ BarWidget {
               readonly property var info: root.ifaceInfo(modelData)
               readonly property bool selected: root.selectedIface === modelData
               width: parent.width
-              height: ifName.implicitHeight + Style.space(6)
+              height: ifList.rowH
               radius: Style.spacing.labelGap
               color: selected ? Style.selectedFillFor(root.bar.foreground, Commons.Color.accent)
                 : (ifHover.hovered ? Commons.Util.alpha(root.bar.foreground, 0.06) : "transparent")
@@ -799,6 +837,8 @@ BarWidget {
                 id: ifName
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(6)
+                anchors.right: ifRates.left
+                anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
                 text: ifRow.info.name === ""
@@ -809,38 +849,51 @@ BarWidget {
                 font.pixelSize: Style.font.caption
                 font.bold: ifRow.selected
                 elide: Text.ElideRight
-                width: parent.width * 0.45
               }
 
               Row {
+                id: ifRates
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(6)
 
                 Text {
+                  width: Math.ceil(rateM.advanceWidth)
+                  horizontalAlignment: Text.AlignRight
                   textFormat: Text.PlainText
                   text: "↓" + root.formatRate(ifRow.info.rx)
                   color: root.rxColor
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font: capFm.font
                 }
 
                 Text {
+                  width: Math.ceil(rateM.advanceWidth)
+                  horizontalAlignment: Text.AlignRight
                   textFormat: Text.PlainText
                   text: "↑" + root.formatRate(ifRow.info.tx)
                   color: root.txColor
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font: capFm.font
+                }
+
+                // Totals columns are reserved on every row (blank on the
+                // Total row) so the rate columns line up and never move.
+                Text {
+                  width: Math.ceil(totalM.advanceWidth) + Style.space(10)
+                  horizontalAlignment: Text.AlignRight
+                  textFormat: Text.PlainText
+                  text: ifRow.info.name !== "" ? "Σ ↓" + root.formatBytes(ifRow.info.rxTotal || 0) : ""
+                  color: Qt.darker(root.bar.foreground, 1.3)
+                  font: capFm.font
                 }
 
                 Text {
-                  visible: ifRow.info.name !== ""
+                  width: Math.ceil(totalM.advanceWidth)
+                  horizontalAlignment: Text.AlignRight
                   textFormat: Text.PlainText
-                  text: "Σ ↓" + root.formatBytes(ifRow.info.rxTotal || 0) + " ↑" + root.formatBytes(ifRow.info.txTotal || 0)
+                  text: ifRow.info.name !== "" ? "↑" + root.formatBytes(ifRow.info.txTotal || 0) : ""
                   color: Qt.darker(root.bar.foreground, 1.3)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font: capFm.font
                 }
               }
 
@@ -851,6 +904,7 @@ BarWidget {
               }
             }
           }
+        }
         }
       }
 
