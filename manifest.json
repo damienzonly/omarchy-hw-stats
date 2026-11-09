@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "damienzonly.stats",
   "name": "System stats",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "damienzonly",
-  "description": "CPU, memory and network sparklines with a detailed popup",
+  "description": "CPU, memory, GPU, power and network sparklines with a detailed popup",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "System stats",
-    "description": "CPU, RAM and network graphs, per-core load, temperatures and top processes",
+    "description": "CPU, RAM, GPU, power and network graphs, battery charge, per-core load, temperatures and top processes",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",

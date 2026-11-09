@@ -2,9 +2,10 @@
 """Emit one JSON sample per interval for damienzonly.stats.
 
 Raw /proc/stat counters, meminfo, per-interface byte counters, CPU/NVMe
-temperatures, CPU frequency and one entry per GPU. Deltas and history are
-computed by the widget, except GPU busy for fdinfo-based drivers, which needs
-the previous engine counters and is computed here.
+temperatures, CPU frequency, power (battery, AC, RAPL, GPU) and one entry per
+GPU. Deltas and history are computed by the widget, except GPU busy for
+fdinfo-based drivers and RAPL watts, which need the previous counters and are
+computed here.
 """
 
 import glob
@@ -73,12 +74,72 @@ def cpu_freq_mhz():
     return total // n // 1000 if n else 0
 
 
+def batteries():
+    """System batteries (peripherals report scope=Device). Watts are signed:
+    positive while charging, negative while discharging."""
+    out = []
+    for ps in sorted(glob.glob("/sys/class/power_supply/*")):
+        if G.read(ps + "/type").strip() != "Battery" or G.read(ps + "/scope").strip() == "Device":
+            continue
+        status = G.read(ps + "/status").strip() or "Unknown"
+        volts = G.read_int(ps + "/voltage_now") / 1e6
+        watts = G.read_int(ps + "/power_now") / 1e6
+        if not watts:
+            watts = abs(G.read_int(ps + "/current_now")) / 1e6 * volts
+        watts = abs(watts)
+        if status == "Discharging":
+            watts = -watts
+        elif status != "Charging":
+            watts = 0.0
+        # energy_* is in µWh; charge_* in µAh needs the voltage.
+        now = G.read_int(ps + "/energy_now") / 1e6
+        full = G.read_int(ps + "/energy_full") / 1e6
+        design = G.read_int(ps + "/energy_full_design") / 1e6
+        if not full:
+            vd = G.read_int(ps + "/voltage_min_design") / 1e6 or volts
+            now = G.read_int(ps + "/charge_now") / 1e6 * vd
+            full = G.read_int(ps + "/charge_full") / 1e6 * vd
+            design = G.read_int(ps + "/charge_full_design") / 1e6 * vd
+        out.append({"name": os.path.basename(ps), "status": status,
+                    "capacity": G.read_int(ps + "/capacity"), "watts": round(watts, 2),
+                    "energyNow": round(now, 2), "energyFull": round(full, 2),
+                    "energyDesign": round(design, 2), "cycles": G.read_int(ps + "/cycle_count")})
+    return out
+
+
+def ac_online():
+    for ps in glob.glob("/sys/class/power_supply/*"):
+        if G.read(ps + "/type").strip() in ("Mains", "USB", "USB_C") and G.read_int(ps + "/online"):
+            return True
+    return False
+
+
+def rapl_domains():
+    """Top-level RAPL zones whose counter we can read: [(name, path, range)].
+    energy_uj is root-only by default; unreadable zones are skipped."""
+    out = []
+    for z in sorted(glob.glob("/sys/class/powercap/intel-rapl:[0-9]*")):
+        if os.path.basename(z).count(":") != 1 or not os.access(z + "/energy_uj", os.R_OK):
+            continue
+        out.append((G.read(z + "/name").strip(), z + "/energy_uj", G.read_int(z + "/max_energy_range_uj")))
+    return out
+
+
+def gpu_watts(hwmon):
+    if not hwmon:
+        return 0.0
+    uw = G.read_int(hwmon + "/power1_average") or G.read_int(hwmon + "/power1_input")
+    return round(uw / 1e6, 2)
+
+
 def main():
     cpu_hw = hwmon_by_name("coretemp", "k10temp", "zenpower", "cpu_thermal")
     nvme_hw = hwmon_by_name("nvme")
     gpus = G.discover()
     needs_fdinfo = any(g["vendor"] != "amd" and g["driver"] != "nvidia" for g in gpus)
     has_nvidia = any(g["driver"] == "nvidia" for g in gpus)
+    rapl = rapl_domains()
+    prev_rapl = {}
 
     fd_paths = []
     prev_clients = {}
@@ -100,7 +161,7 @@ def main():
         for g in gpus:
             entry = {"id": g["id"], "vendor": g["vendor"], "driver": g["driver"], "name": g["name"],
                      "busy": 0, "memUsed": 0, "memTotal": 0, "gttUsed": 0, "gttTotal": 0,
-                     "temp": temp_c(g["hwmon"]), "source": "fdinfo"}
+                     "temp": temp_c(g["hwmon"]), "power": gpu_watts(g["hwmon"]), "source": "fdinfo"}
             dev = g["dev"]
             if g["driver"] == "amdgpu":
                 entry.update(source="sysfs",
@@ -144,6 +205,21 @@ def main():
                              memUsed=int((vram or system) * 1024))
             out_gpus.append(entry)
 
+        # RAPL: package-N zones summed as "cpu", psys (whole platform) kept apart.
+        rapl_w = {}
+        for name, path, rng in rapl:
+            uj = G.read_int(path, -1)
+            if uj < 0:
+                continue
+            before = prev_rapl.get(path)
+            if before and now_ns > before[1]:
+                d = uj - before[0]
+                if d < 0:
+                    d += rng
+                key = "cpu" if name.startswith("package") else name
+                rapl_w[key] = rapl_w.get(key, 0) + d / ((now_ns - before[1]) / 1e3)
+            prev_rapl[path] = (uj, now_ns)
+
         prev_clients = clients
         prev_t = now_ns
 
@@ -154,6 +230,9 @@ def main():
             "temp": {"cpu": temp_c(cpu_hw), "nvme": temp_c(nvme_hw)},
             "freq": cpu_freq_mhz(),
             "gpus": out_gpus,
+            "power": {"ac": ac_online(), "batteries": batteries(),
+                      "rapl": {k: round(v, 2) for k, v in rapl_w.items()},
+                      "raplReadable": bool(rapl)},
         }
         sys.stdout.write(json.dumps(sample, separators=(",", ":")) + "\n")
         sys.stdout.flush()

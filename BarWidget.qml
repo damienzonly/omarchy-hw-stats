@@ -85,6 +85,61 @@ BarWidget {
   }
   property var ips: ({})
 
+  // Power from the sampler: { ac, batteries: [{ name, status, capacity,
+  // watts (+charging / -discharging), energyNow, energyFull, energyDesign,
+  // cycles }], rapl: { cpu, psys, ... } (W), raplReadable }.
+  property var power: ({ ac: false, batteries: [], rapl: {}, raplReadable: false })
+  property var powerHist: []
+  property var cpuWattsHist: []
+  property var gpuWattsHist: []
+  property var batteryHist: []     // charge %
+  readonly property var battery: combineBatteries(power.batteries || [])
+  readonly property real gpuWatts: gpus.reduce(function(a, g) { return a + (g.power || 0) }, 0)
+  // What the machine is drawing, and how it was measured:
+  //   battery  - on battery, the discharge rate is the whole system draw
+  //   psys     - RAPL platform domain (whole SoC + board on recent Intel)
+  //   estimate - battery charging + CPU package + GPUs; screen, SSD, etc.
+  //              are not counted, so the real draw is higher
+  readonly property var draw: computeDraw(power, battery, gpuWatts)
+  readonly property bool hasPower: battery !== null || power.raplReadable || gpuWatts > 0
+
+  function combineBatteries(list) {
+    if (!list.length) return null
+    if (list.length === 1) return list[0]
+    var b = { name: "", status: list[0].status, capacity: 0, watts: 0, energyNow: 0, energyFull: 0, energyDesign: 0, cycles: 0 }
+    for (var i = 0; i < list.length; i++) {
+      b.watts += list[i].watts
+      b.energyNow += list[i].energyNow
+      b.energyFull += list[i].energyFull
+      b.energyDesign += list[i].energyDesign
+      b.cycles = Math.max(b.cycles, list[i].cycles)
+      if (list[i].status === "Charging" || list[i].status === "Discharging") b.status = list[i].status
+    }
+    b.capacity = b.energyFull > 0 ? Math.round(100 * b.energyNow / b.energyFull) : list[0].capacity
+    return b
+  }
+
+  function computeDraw(p, bat, gpuW) {
+    var r = p.rapl || {}
+    if (bat && bat.watts < 0 && !p.ac) return { watts: -bat.watts, source: "battery" }
+    if (r.psys > 0) return { watts: r.psys, source: "psys" }
+    var est = (r.cpu || 0) + gpuW + (bat && bat.watts > 0 ? bat.watts : 0)
+    // On AC with a draining battery, the battery share is a lower bound too.
+    if (bat && bat.watts < 0) est = Math.max(est, -bat.watts)
+    return { watts: est, source: "estimate" }
+  }
+
+  function formatWatts(w) { return (w >= 100 ? Math.round(w) : w.toFixed(1)) + " W" }
+
+  // Hours until empty (discharging) or full (charging), as "3h 12m".
+  function batteryEta(b) {
+    if (!b || b.watts === 0 || b.energyFull <= 0) return ""
+    var wh = b.watts < 0 ? b.energyNow : b.energyFull - b.energyNow
+    if (wh <= 0) return ""
+    var mins = Math.round(60 * wh / Math.abs(b.watts))
+    return Math.floor(mins / 60) + "h " + (mins % 60) + "m"
+  }
+
   // Series colors come from the theme: download = accent, upload = the first
   // theme color clearly distinct from the accent (yellow preferred),
   // memory = magenta. Graphs sit on the theme's darkest background so the
@@ -95,6 +150,7 @@ BarWidget {
   readonly property color txColor: pickDistinct(txCandidates, rxColor)
   property color memColor: "#c678dd"
   property color gpuColor: "#56b6c2"
+  property color powerColor: "#98c379"
   property color graphBackground: Qt.darker(Commons.Color.background, 1.6)
 
   // First candidate far enough from `avoid` (themes often use blue as the
@@ -132,6 +188,7 @@ BarWidget {
       root.txCandidates = tx
       root.memColor = root.themeColor(toml, "magenta", "#c678dd")
       root.gpuColor = root.themeColor(toml, "cyan", "#56b6c2")
+      root.powerColor = root.themeColor(toml, "green", "#98c379")
       root.graphBackground = root.themeColor(toml, "darker_background", Qt.darker(Commons.Color.background, 1.6))
     }
   }
@@ -229,6 +286,14 @@ BarWidget {
         for (var gj = 0; gj < s.gpus.length; gj++) if (s.gpus[gj].memTotal > 0) { pick = s.gpus[gj].id; break }
         selectedGpu = pick
       }
+    }
+
+    if (s.power) {
+      power = s.power
+      powerHist = push(powerHist, draw.watts)
+      cpuWattsHist = push(cpuWattsHist, (s.power.rapl || {}).cpu || 0)
+      gpuWattsHist = push(gpuWattsHist, gpuWatts)
+      if (battery) batteryHist = push(batteryHist, battery.capacity)
     }
 
     temps = s.temp
@@ -417,6 +482,18 @@ BarWidget {
       color: root.gpuColor
       color2: root.memColor
       label: Math.round(root.gpuNow) + "%"
+    }
+
+    BarStat {
+      anchors.verticalCenter: parent.verticalCenter
+      visible: root.hasPower
+      icon: root.power.ac ? "󰚥" : "󰁹"
+      values: root.powerHist
+      minimumScale: 10
+      color: root.powerColor
+      label: (root.draw.source === "estimate" ? "~" : "") + Math.round(root.draw.watts) + "W"
+      label2: root.battery ? root.battery.capacity + "%" + (root.battery.watts > 0 ? "+" : "") : ""
+      label2Color: root.battery && root.battery.capacity <= 15 && root.battery.watts <= 0 ? Commons.Color.urgent : root.bar.barForeground
     }
 
     BarStat {
@@ -765,6 +842,106 @@ BarWidget {
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
               }
+            }
+          }
+        }
+      }
+
+      // Power
+      Section {
+        visible: root.hasPower
+        title: "POWER"
+        trailing: (root.draw.source === "estimate" ? "~" : "") + root.formatWatts(root.draw.watts)
+          + (root.battery ? "  ·  " + root.battery.capacity + "%" : "")
+
+        BigGraph {
+          values: root.powerHist
+          minimumScale: 10
+          lineColor: root.powerColor
+        }
+
+        // Breakdown by component, on its own scale.
+        Text {
+          visible: root.power.raplReadable || root.gpuWatts > 0
+          textFormat: Text.PlainText
+          text: "Components  ·  CPU " + (root.power.raplReadable ? root.formatWatts((root.power.rapl || {}).cpu || 0) : "—")
+            + "  ·  GPU " + root.formatWatts(root.gpuWatts)
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        BigGraph {
+          visible: root.power.raplReadable || root.gpuWatts > 0
+          height: Style.space(48)
+          values: root.cpuWattsHist
+          values2: root.gpuWattsHist
+          minimumScale: 5
+          lineColor: root.cpuColor
+          lineColor2: root.gpuColor
+        }
+
+        Text {
+          visible: root.battery !== null
+          textFormat: Text.PlainText
+          text: root.battery ? "Charge  ·  " + root.battery.capacity + "%  ·  " + root.battery.status : ""
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        BigGraph {
+          visible: root.battery !== null
+          height: Style.space(40)
+          values: root.batteryHist
+          maximum: 100
+          lineColor: root.powerColor
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          text: root.draw.source === "battery" ? "System draw, measured from battery discharge"
+            : root.draw.source === "psys" ? "System draw, measured by RAPL (platform)"
+            : "Lower bound: battery charging + CPU package + GPUs" + (root.power.raplReadable ? "" : " (CPU needs RAPL read access)")
+          color: Qt.darker(root.bar.foreground, 1.4)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        Grid {
+          width: parent.width
+          columns: 2
+          columnSpacing: Style.space(16)
+          rowSpacing: Style.space(2)
+
+          Repeater {
+            model: {
+              var b = root.battery, r = root.power.rapl || {}
+              var rows = [{ key: "Source", value: root.power.ac ? "AC adapter" : "Battery" }]
+              if (b) {
+                rows.push({ key: "Battery", value: b.capacity + "%  ·  " + b.status })
+                rows.push({ key: b.watts > 0 ? "Charging at" : "Discharging at", value: root.formatWatts(Math.abs(b.watts)) })
+                var eta = root.batteryEta(b)
+                if (eta) rows.push({ key: b.watts > 0 ? "Until full" : "Time left", value: eta })
+                if (b.energyFull > 0) rows.push({ key: "Capacity", value: b.energyFull.toFixed(1) + " Wh" })
+                if (b.energyFull > 0 && b.energyDesign > 0)
+                  rows.push({ key: "Health", value: Math.round(100 * b.energyFull / b.energyDesign) + "%" })
+                if (b.cycles > 0) rows.push({ key: "Cycles", value: String(b.cycles) })
+              }
+              rows.push({ key: "CPU package", value: r.cpu !== undefined ? root.formatWatts(r.cpu) : "—" })
+              for (var i = 0; i < root.gpus.length; i++)
+                if (root.gpus[i].power > 0)
+                  rows.push({ key: "GPU " + root.gpuShortName(root.gpus[i]).replace(" (integrated)", ""), value: root.formatWatts(root.gpus[i].power) })
+              return rows
+            }
+
+            KeyValue {
+              required property var modelData
+              width: (parent.width - Style.space(16)) / 2
+              key: modelData.key
+              value: modelData.value
             }
           }
         }

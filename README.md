@@ -1,10 +1,31 @@
 # damienzonly.stats
 
-Omarchy shell bar widget in the spirit of Stats for macOS: CPU, RAM, GPU and
-network sparklines in the bar, with a popup showing 5-minute graphs, per-core
+Omarchy shell bar widget in the spirit of Stats for macOS: CPU, RAM, GPU,
+power and network sparklines in the bar, with a popup showing 5-minute graphs, per-core
 load, memory breakdown, GPU load/memory (with a device picker on multi-GPU
 machines), per-interface network traffic (click an interface to graph it),
-temperatures and top processes by CPU, RAM, GPU and VRAM.
+power draw (with CPU/GPU breakdown and battery charge graphs), temperatures and
+top processes by CPU, RAM, GPU and VRAM.
+
+## Power
+
+The bar shows the system draw in watts and the battery charge. How the draw
+is measured, best source first:
+
+1. On battery: the battery discharge rate, which is the whole system's draw.
+2. RAPL `psys` (recent Intel laptops): platform power.
+3. Otherwise (on AC), a lower bound marked `~`: battery charging power + CPU
+   package (RAPL) + GPU power (hwmon `power1_*`, e.g. amdgpu PPT). The screen,
+   SSD and the rest of the board aren't counted.
+
+RAPL `energy_uj` is root-only by default (it was restricted because of the
+PLATYPUS power side channel, CVE-2020-8694). To let the widget read it:
+
+```
+echo 'ACTION=="add", SUBSYSTEM=="powercap", KERNEL=="intel-rapl:*", RUN+="/bin/chmod a+r /sys%p/energy_uj"' \
+  | sudo tee /etc/udev/rules.d/99-rapl-read.rules
+sudo udevadm trigger -s powercap -c add
+```
 
 ## GPU support
 
